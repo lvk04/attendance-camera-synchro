@@ -1,0 +1,14 @@
+*.pt
+*.pth
+*.onnx
+*.mp4
+*.old
+*.png
+*.jpg
+/__pycache__/
+/.venv/
+/.obsidian/
+move.py
+map.py
+estimate.py
+test.py
