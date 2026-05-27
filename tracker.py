@@ -268,7 +268,12 @@ class PersonTracker:
                         if (self.pending_targets
                                 and self._in_roi(base_point)
                                 and global_id not in self._linked_targets):
-                            name = self.pending_targets.pop(0)
+                            name = self.pending_targets[0]
+                            # Unlink old global_id if name was already linked
+                            old_gid = next((g for g, n in self._linked_targets.items() if n == name), None)
+                            if old_gid is not None:
+                                del self._linked_targets[old_gid]
+                            self.pending_targets.pop(0)
                             self._linked_targets[global_id] = name
                             logger.info("TRACK LINKED: '%s' → global_id=%d at ROI zone",
                                         name, global_id)
