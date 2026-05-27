@@ -307,3 +307,4 @@ class PersonTracker:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
             yield frame, current_detections
+##

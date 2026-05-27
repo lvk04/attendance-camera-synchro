@@ -17,8 +17,12 @@ def _zmq_listener(tracker):
         try:
             msg = _pull.recv_json()
             if msg["action"] == "track":
-                tracker.pending_targets.append(msg["name"])
-                print(f"[TRACK] Target added: {msg['name']} — queue size: {len(tracker.pending_targets)}")
+                name = msg["name"]
+                if name not in tracker.pending_targets:
+                    tracker.pending_targets.append(name)
+                    print(f"[TRACK] Target added: {name} — queue size: {len(tracker.pending_targets)}")
+                else:
+                    print(f"[TRACK] Target skipped (already pending): {name}")
         except Exception as e:
             print(f"[TRACK] ZMQ error: {e}")
 
