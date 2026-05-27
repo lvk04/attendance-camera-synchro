@@ -273,22 +273,32 @@ class PersonTracker:
                             logger.info("TRACK LINKED: '%s' → global_id=%d at ROI zone",
                                         name, global_id)
                         # ═══════════════════════════
-
-                        # Render all linked targets
+                        
+                        # Determine the display name (Use linked name if it exists, otherwise fallback to ID)
                         if global_id in self._linked_targets:
-                            name = self._linked_targets[global_id]
-                            current_detections.append({
-                                "id": track_id,
-                                "global_id": global_id,
-                                "bbox": box,
-                                "base_point": base_point,
-                            })
-
-                            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 5)
-                            label = f"TRACKING: {name}"
-                            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 3)
-                            cv2.rectangle(frame, (box[0], box[1]-th-10), (box[0]+tw, box[1]), (0, 255, 0), -1)
-                            cv2.putText(frame, label, (box[0], box[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3)
+                            display_name = self._linked_targets[global_id]
+                        else:
+                            display_name = f"Unknown (ID {global_id})"
+                        
+                        # FIX: Now we append and render EVERYONE tracked, not just linked targets
+                        current_detections.append({
+                            "id": track_id,
+                            "global_id": global_id,
+                            "bbox": box,
+                            "base_point": base_point,
+                            "name": display_name
+                        })
+                        
+                        # Choose color dynamically so different IDs have different box colors
+                        color_idx = global_id % len(self.COLOR_PALETTE)
+                        box_color = tuple(int(c) for c in self.COLOR_PALETTE[color_idx])
+                        
+                        # Draw the bounding box and text
+                        cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), box_color, 3)
+                        label = f"TRACKING: {display_name}"
+                        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+                        cv2.rectangle(frame, (box[0], box[1]-th-10), (box[0]+tw, box[1]), box_color, -1)
+                        cv2.putText(frame, label, (box[0], box[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
             # Draw ROI rectangle
             rx1, ry1, rx2, ry2 = self.ROI
