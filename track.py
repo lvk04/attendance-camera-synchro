@@ -17,9 +17,8 @@ def _zmq_listener(tracker):
         try:
             msg = _pull.recv_json()
             if msg["action"] == "track":
-                tracker.target_name = msg["name"]
-                tracker.target_global_id = None
-                print(f"[TRACK] Target set: {msg['name']} — waiting for ROI entry")
+                tracker.pending_targets.append(msg["name"])
+                print(f"[TRACK] Target added: {msg['name']} — queue size: {len(tracker.pending_targets)}")
         except Exception as e:
             print(f"[TRACK] ZMQ error: {e}")
 
@@ -52,13 +51,23 @@ def main():
         # 3. Display Results
         # Resize for performance/viewing
         small_frame = cv2.resize(frame, (480, 384))
-        h = small_frame.shape[0]
         
-        # Overlay count (detections is a list of dicts)
-        unique_ids = set(p.get("global_id", p["id"]) for p in detections)
-        count = len(unique_ids)
-        cv2.putText(small_frame, f"People: {count}",
-                    (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 165, 255), 3)
+        # Show multi-target tracking status in overlay
+        linked = tracker_app._linked_targets
+        pending = tracker_app.pending_targets
+        if linked:
+            names = list(linked.values())
+            label = f"TRACKING: {', '.join(names)}"
+            color = (0, 255, 0)
+            if pending:
+                label += f" (+{len(pending)} waiting)"
+        elif pending:
+            label = f"WAITING: {len(pending)} target(s) for ROI"
+            color = (255, 165, 0)
+        else:
+            label = "No target set"
+            color = (100, 100, 100)
+        cv2.putText(small_frame, label, (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
         cv2.imshow("OSNet ReID Tracking", small_frame)
         

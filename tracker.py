@@ -43,11 +43,8 @@ class PersonTracker:
 
         # ===== FAISS & REID LOGIC =====
         self.dim = 512
-        self.index = faiss.IndexFlatIP(self.dim)
-        # id_map[i] -> global_id for the i-th FAISS vector
-        self.id_map: list[int] = []
-        # Stores the raw embedding for each FAISS index position (for EMA updates)
-        self.embeddings: list[np.ndarray] = []
+        self.index = faiss.IndexIDMap(faiss.IndexFlatIP(self.dim))
+        self.embeddings: dict[int, np.ndarray] = {}
         self.next_global_id = 0
 
         # --- Tunable thresholds (all now constructor params) ---
@@ -68,9 +65,11 @@ class PersonTracker:
         # ROI zone — person must enter this to trigger identity link
         self.ROI = (400, 50, 560, 350)  # (x1, y1, x2, y2)
 
-        # Target tracking state — set by ZMQ signal, linked on ROI entry
-        self.target_name: str | None = None
-        self.target_global_id: int | None = None
+        # Multi-target tracking state
+        # pending_targets: FIFO queue of names from attendance signals, waiting for ROI entry
+        # _linked_targets: global_id -> name mapping for people who have entered ROI
+        self.pending_targets: list[str] = []
+        self._linked_targets: dict[int, str] = {}
 
         self.frame_idx = 0
 
@@ -135,63 +134,48 @@ class PersonTracker:
             self.track_history.pop(t_id, None)
             self.track_last_seen.pop(t_id, None)
 
-    def _update_faiss_embedding(self, faiss_idx: int, new_emb: np.ndarray):
-        """FIX 8: EMA-update the stored embedding and rebuild that FAISS slot."""
-        old_emb = self.embeddings[faiss_idx]
+    def _update_faiss_embedding(self, global_id: int, new_emb: np.ndarray):
+        """EMA-update the stored embedding and replace the FAISS vector in-place."""
+        old_emb = self.embeddings[global_id]
         updated = (1 - self.EMA_ALPHA) * old_emb + self.EMA_ALPHA * new_emb
         updated /= np.linalg.norm(updated) + 1e-6
-        self.embeddings[faiss_idx] = updated
+        self.embeddings[global_id] = updated
 
-        # faiss.IndexFlatIP has no in-place update; rebuild from stored embeddings.
-        self.index.reset()
-        all_embs = np.stack(self.embeddings, axis=0)
-        self.index.add(all_embs)
+        self.index.remove_ids(np.array([global_id]))
+        self.index.add_with_ids(updated.reshape(1, -1), np.array([global_id]))
 
-    def _match_or_register(self, emb: np.ndarray) -> tuple[int, int | None]:
+    def _match_or_register(self, emb: np.ndarray) -> tuple[int, bool]:
         """
-        FIX 6: Search top-k and use majority-vote among matches above threshold.
-        Returns (global_id, faiss_index_of_match | None).
-        faiss_index_of_match is None when a brand-new ID is created.
+        Search top-k and use majority-vote among matches above threshold.
+        Returns (global_id, was_matched) where was_matched=True if found in gallery.
         """
         if self.index.ntotal == 0:
             gid = self.next_global_id
             self.next_global_id += 1
-            self.id_map.append(gid)
-            self.embeddings.append(emb.copy())
-            self.index.add(emb.reshape(1, -1))
-            return gid, None
+            self.embeddings[gid] = emb.copy()
+            self.index.add_with_ids(emb.reshape(1, -1), np.array([gid]))
+            return gid, False
 
         k = min(self.REID_TOP_K, self.index.ntotal)
         D, I = self.index.search(emb.reshape(1, -1), k)
 
-        # Collect all candidates above the similarity threshold
-        candidates: dict[int, list[float]] = {}  # global_id -> list of similarities
-        candidate_faiss_idx: dict[int, int] = {}  # global_id -> best faiss slot
-        for sim, faiss_idx in zip(D[0], I[0]):
-            if sim > self.SIM_THRESHOLD:
-                gid = self.id_map[int(faiss_idx)]
-                candidates.setdefault(gid, []).append(sim)
-                # Keep track of the faiss slot with the best similarity per gid
-                if gid not in candidate_faiss_idx or sim > max(
-                    candidates[gid][:-1], default=-1
-                ):
-                    candidate_faiss_idx[gid] = int(faiss_idx)
+        candidates: dict[int, list[float]] = {}
+        for sim, gid in zip(D[0], I[0]):
+            if gid != -1 and sim > self.SIM_THRESHOLD:
+                candidates.setdefault(int(gid), []).append(sim)
 
         if candidates:
-            # Majority vote: pick the gid with the most votes; break ties by avg sim
             best_gid = max(
                 candidates,
                 key=lambda g: (len(candidates[g]), sum(candidates[g]) / len(candidates[g])),
             )
-            return best_gid, candidate_faiss_idx[best_gid]
+            return best_gid, True
 
-        # No match — register new identity
         gid = self.next_global_id
         self.next_global_id += 1
-        self.id_map.append(gid)
-        self.embeddings.append(emb.copy())
-        self.index.add(emb.reshape(1, -1))
-        return gid, None
+        self.embeddings[gid] = emb.copy()
+        self.index.add_with_ids(emb.reshape(1, -1), np.array([gid]))
+        return gid, False
 
     # ------------------------------------------------------------------
     # Main tracking loop
@@ -247,13 +231,7 @@ class PersonTracker:
                         emb = self.get_embedding(frame, box)
                         if emb is not None:
                             emb /= np.linalg.norm(emb) + 1e-6
-                            # Find the faiss slot for this global_id
-                            faiss_idx = next(
-                                (i for i, g in enumerate(self.id_map) if g == global_id),
-                                None,
-                            )
-                            if faiss_idx is not None:
-                                self._update_faiss_embedding(faiss_idx, emb)
+                            self._update_faiss_embedding(global_id, emb)
                     else:
                         # Check occlusion with the configurable threshold (FIX 5)
                         is_occluded = any(
@@ -271,11 +249,9 @@ class PersonTracker:
                                 emb = self.get_embedding(frame, box)
                                 if emb is not None:
                                     emb /= np.linalg.norm(emb) + 1e-6
-                                    # FIX 6: majority-vote k-NN match
-                                    best_gid, faiss_idx = self._match_or_register(emb)
-                                    # FIX 8: EMA update if this was an existing identity
-                                    if faiss_idx is not None:
-                                        self._update_faiss_embedding(faiss_idx, emb)
+                                    best_gid, was_matched = self._match_or_register(emb)
+                                    if was_matched:
+                                        self._update_faiss_embedding(best_gid, emb)
                                     self.trackid_to_global[track_id] = best_gid
                                     global_id = best_gid
 
@@ -287,46 +263,32 @@ class PersonTracker:
                         assigned_in_frame[global_id] = score
 
                         base_point = (int((x1 + x2) / 2), int(y2))
-                        current_detections.append({
-                            "id": track_id,
-                            "global_id": global_id,
-                            "bbox": box,
-                            "base_point": base_point,
-                        })
 
                         # ═══════ ROI LINKING ═══════
-                        if (self.target_name is not None
-                                and self.target_global_id is None
-                                and self._in_roi(base_point)):
-                            self.target_global_id = global_id
+                        if (self.pending_targets
+                                and self._in_roi(base_point)
+                                and global_id not in self._linked_targets):
+                            name = self.pending_targets.pop(0)
+                            self._linked_targets[global_id] = name
                             logger.info("TRACK LINKED: '%s' → global_id=%d at ROI zone",
-                                        self.target_name, global_id)
+                                        name, global_id)
                         # ═══════════════════════════
 
-                        color = self.COLOR_PALETTE[global_id % len(self.COLOR_PALETTE)].tolist()
-                        cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 3)
-                        cv2.putText(
-                            frame,
-                            f"ID:{global_id}",
-                            (box[0], box[1] - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.6,
-                            color,
-                            2,
-                        )
+                        # Render all linked targets
+                        if global_id in self._linked_targets:
+                            name = self._linked_targets[global_id]
+                            current_detections.append({
+                                "id": track_id,
+                                "global_id": global_id,
+                                "bbox": box,
+                                "base_point": base_point,
+                            })
 
-                        # ═══════ TARGET HIGHLIGHT ═══════
-                        if self.target_name and global_id == self.target_global_id:
                             cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 5)
-                            label = f"TRACKING: {self.target_name}"
+                            label = f"TRACKING: {name}"
                             (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 3)
                             cv2.rectangle(frame, (box[0], box[1]-th-10), (box[0]+tw, box[1]), (0, 255, 0), -1)
                             cv2.putText(frame, label, (box[0], box[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 3)
-                        # ════════════════════════════════
-                    else:
-                        cv2.rectangle(
-                            frame, (box[0], box[1]), (box[2], box[3]), (100, 100, 100), 1
-                        )
 
             # Draw ROI rectangle
             rx1, ry1, rx2, ry2 = self.ROI
