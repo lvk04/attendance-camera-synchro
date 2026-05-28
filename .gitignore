@@ -8,6 +8,7 @@
 /__pycache__/
 /.venv/
 /.obsidian/
+/.kilo/
 move.py
 map.py
 estimate.py

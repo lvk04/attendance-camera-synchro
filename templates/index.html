@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Person Tracking Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  h1 { font-size: 22px; margin-bottom: 20px; color: #f0f6fc; }
+  .dashboard {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .stream-panel {
+    flex: 1 1 60%;
+    min-width: 320px;
+  }
+  .stream-panel img {
+    width: 100%;
+    height: auto;
+    max-height: 85vh;
+    border-radius: 8px;
+    border: 1px solid #30363d;
+    display: block;
+    background: #000;
+  }
+  .status-panel {
+    flex: 0 0 300px;
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .status-panel h2 { font-size: 16px; color: #f0f6fc; margin-bottom: 4px; }
+  .stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 14px;
+    border-bottom: 1px solid #21262d;
+  }
+  .stat-row .label { color: #8b949e; }
+  .stat-row .value { color: #c9d1d9; font-weight: 600; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge-green  { background: #1b4721; color: #7ee787; }
+  .badge-gray   { background: #21262d; color: #8b949e; }
+
+  .target-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .target-list li {
+    font-size: 13px;
+    padding: 4px 8px;
+    background: #21262d;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+  <h1>Person Tracking Dashboard</h1>
+  <div class="dashboard">
+    <div class="stream-panel">
+      <img src="/video_feed" alt="Tracking Stream">
+    </div>
+    <div class="status-panel">
+      <div>
+        <h2>Status</h2>
+        <div class="stat-row"><span class="label">Frame</span><span class="value" id="s-frame">—</span></div>
+        <div class="stat-row"><span class="label">Detections</span><span class="value" id="s-detections">—</span></div>
+        <div class="stat-row"><span class="label">Tracking</span><span class="value" id="s-tracking-status"><span class="badge badge-gray">Waiting</span></span></div>
+      </div>
+
+      <div>
+        <h2>Linked Targets</h2>
+        <ul class="target-list" id="linked-list">
+          <li style="color:#8b949e;font-style:italic;">None</li>
+        </ul>
+      </div>
+
+
+    </div>
+  </div>
+
+<script>
+function updateStatus() {
+  fetch('/status')
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('s-frame').textContent = data.frame_idx;
+      document.getElementById('s-detections').textContent = data.detection_count;
+
+      const linked = Object.values(data.linked_targets);
+      const statusEl = document.getElementById('s-tracking-status');
+
+      if (linked.length > 0) {
+        statusEl.innerHTML = `<span class="badge badge-green">${linked.join(', ')}</span>`;
+      } else {
+        statusEl.innerHTML = `<span class="badge badge-gray">Idle</span>`;
+      }
+
+      // Linked targets
+      const linkedUl = document.getElementById('linked-list');
+      if (linked.length === 0) {
+        linkedUl.innerHTML = '<li style="color:#8b949e;font-style:italic;">None</li>';
+      } else {
+        linkedUl.innerHTML = Object.entries(data.linked_targets)
+          .map(([gid, name]) => `<li><span>${name}</span><span style="color:#8b949e">ID ${gid}</span></li>`)
+          .join('');
+      }
+
+    })
+    .catch(() => {});
+}
+
+setInterval(updateStatus, 1500);
+updateStatus();
+</script>
+</body>
+</html>
