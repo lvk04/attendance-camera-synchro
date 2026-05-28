@@ -32,7 +32,7 @@ def _zmq_listener():
 
     context = zmq.Context()
     pull = context.socket(zmq.PULL)
-    pull.connect("tcp://127.0.0.1:5557")
+    pull.connect("tcp://10.40.91.141:5557")
 
     while True:
         try:
@@ -40,12 +40,17 @@ def _zmq_listener():
             if msg["action"] == "track":
                 name = msg["name"]
                 with lock:
-                    if name not in pending_targets:
-                        pending_targets.append(name)
-                        if tracker_app is not None:
-                            tracker_app.pending_targets = pending_targets
+                    if tracker_app is not None and name not in tracker_app.pending_targets:
+                        tracker_app.pending_targets.append(name)
                         logger.info(
                             "[FLASK] Target added via ZMQ: %s — queue size: %d",
+                            name,
+                            len(tracker_app.pending_targets),
+                        )
+                    elif tracker_app is None and name not in pending_targets:
+                        pending_targets.append(name)
+                        logger.info(
+                            "[FLASK] Target buffered (tracker loading): %s — queue size: %d",
                             name,
                             len(pending_targets),
                         )
@@ -63,6 +68,12 @@ def _track_worker():
         reid_weights="osnet_x1_0_msmt17.pth",
     )
 
+    with lock:
+        for name in pending_targets:
+            if name not in tracker_app.pending_targets:
+                tracker_app.pending_targets.append(name)
+        pending_targets.clear()
+
     linked_targets = tracker_app._linked_targets
     pending_targets = tracker_app.pending_targets
 
@@ -76,7 +87,6 @@ def _track_worker():
             latest_dets = detections
             frame_idx = tracker_app.frame_idx
             linked_targets = tracker_app._linked_targets
-            pending_targets = tracker_app.pending_targets
 
 
 def _generate_frames():
@@ -110,7 +120,6 @@ def video_feed():
 def status():
     with lock:
         return jsonify(
-            frame_idx=frame_idx,
             linked_targets={str(gid): name for gid, name in linked_targets.items()},
             pending_targets=pending_targets,
             detection_count=len(latest_dets),

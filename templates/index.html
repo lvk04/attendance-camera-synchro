@@ -87,7 +87,6 @@
     <div class="status-panel">
       <div>
         <h2>Status</h2>
-        <div class="stat-row"><span class="label">Frame</span><span class="value" id="s-frame">—</span></div>
         <div class="stat-row"><span class="label">Detections</span><span class="value" id="s-detections">—</span></div>
         <div class="stat-row"><span class="label">Tracking</span><span class="value" id="s-tracking-status"><span class="badge badge-gray">Waiting</span></span></div>
       </div>
@@ -108,7 +107,6 @@ function updateStatus() {
   fetch('/status')
     .then(r => r.json())
     .then(data => {
-      document.getElementById('s-frame').textContent = data.frame_idx;
       document.getElementById('s-detections').textContent = data.detection_count;
 
       const linked = Object.values(data.linked_targets);
