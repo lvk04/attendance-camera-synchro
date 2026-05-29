@@ -60,7 +60,12 @@ class PersonTracker:
         # so stale entries can be evicted after track_ttl missed frames.
         self.track_history: dict[int, int] = {}       # track_id -> stable frame count
         self.track_last_seen: dict[int, int] = {}     # track_id -> frame index
+        self.track_last_position: dict[int, tuple[int, int]] = {}  # track_id -> last known (x, y)
         self.TRACK_TTL = track_ttl
+
+        # Door polygon — if a tracked person's last known position is inside this
+        # area when they go stale, the linked identity is removed (exited via door).
+        self.DOOR_POLYGON = np.array([(430, 0), (530, 0), (510, 230), (430, 160)], dtype=np.int32)
 
         # ROI zone — person must enter this to trigger identity link
         self.ROI = (400, 50, 560, 350)  # (x1, y1, x2, y2)
@@ -87,6 +92,9 @@ class PersonTracker:
         x, y = point
         rx1, ry1, rx2, ry2 = self.ROI
         return rx1 <= x <= rx2 and ry1 <= y <= ry2
+
+    def _in_door_area(self, point: tuple[int, int]) -> bool:
+        return cv2.pointPolygonTest(self.DOOR_POLYGON, point, False) >= 0
 
     def get_iou(self, boxA, boxB) -> float:
         xA = max(boxA[0], boxB[0])
@@ -123,14 +131,22 @@ class PersonTracker:
         return feat.cpu().numpy().flatten().astype(np.float32)
 
     def _evict_stale_tracks(self):
-        """FIX 4: Remove track IDs that haven't been seen for TRACK_TTL frames."""
+        """Remove track IDs that haven't been seen for TRACK_TTL frames.
+        If the track's last known position was inside the door polygon,
+        unlink its global_id from _linked_targets (person exited via door)."""
         stale = [
             t_id
             for t_id, last in self.track_last_seen.items()
             if self.frame_idx - last > self.TRACK_TTL
         ]
         for t_id in stale:
-            self.trackid_to_global.pop(t_id, None)
+            pos = self.track_last_position.pop(t_id, None)
+            gid = self.trackid_to_global.pop(t_id, None)
+            if gid is not None and pos is not None and self._in_door_area(pos):
+                name = self._linked_targets.pop(gid, None)
+                if name is not None:
+                    logger.info("TRACK REMOVED via door: '%s' (global_id=%d) at %s",
+                                name, gid, pos)
             self.track_history.pop(t_id, None)
             self.track_last_seen.pop(t_id, None)
 
@@ -222,6 +238,7 @@ class PersonTracker:
                     box = [int(x1), int(y1), int(x2), int(y2)]
 
                     self.track_last_seen[track_id] = self.frame_idx
+                    self.track_last_position[track_id] = (int((x1 + x2) / 2), int(y2))
                     global_id = None
 
                     if track_id in self.trackid_to_global:
@@ -311,5 +328,11 @@ class PersonTracker:
             cv2.putText(frame, "TRACK ZONE", (rx1, ry1-10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
+            # Draw door polygon
+            cv2.polylines(frame, [self.DOOR_POLYGON], True, (0, 0, 255), 2)
+            cx = int(np.mean(self.DOOR_POLYGON[:, 0]))
+            cv2.putText(frame, "DOOR ZONE", (cx, 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
             yield frame, current_detections
-##
+###

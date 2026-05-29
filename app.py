@@ -119,10 +119,17 @@ def video_feed():
 @app.route("/status")
 def status():
     with lock:
+        total_tracked = len(tracker_app.trackid_to_global) if tracker_app is not None else 0
+        frame_gids = [d["global_id"] for d in latest_dets]
+        linked_in_frame = sum(1 for gid in frame_gids if gid in linked_targets)
+        linked_in_frame_names = [d["name"] for d in latest_dets if d["global_id"] in linked_targets]
         return jsonify(
             linked_targets={str(gid): name for gid, name in linked_targets.items()},
             pending_targets=pending_targets,
             detection_count=len(latest_dets),
+            total_tracked=total_tracked,
+            linked_in_frame=linked_in_frame,
+            linked_in_frame_names=linked_in_frame_names,
         )
 
 
